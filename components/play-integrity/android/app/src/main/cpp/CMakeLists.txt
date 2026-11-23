@@ -46,6 +46,15 @@ if(CMAKE_ANDROID_ARCH_ABI STREQUAL "x86_64")
     set(DOBBY_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
     set(DOBBY_BUILD_TEST OFF CACHE BOOL "" FORCE)
     add_subdirectory(${PIF_VENDOR_DIR}/Dobby ${CMAKE_CURRENT_BINARY_DIR}/dobby)
+    # Dobby lists every architecture's .asm unconditionally. Its arm64 assembly uses
+    # Apple-style cdecl()/bracket expressions that the x86_64 NDK assembler rejects.
+    # x86_64 only needs the x64 trampolines, so drop the ARM assembly sources.
+    get_target_property(DOBBY_SOURCES dobby_static SOURCES)
+    foreach(source IN LISTS DOBBY_SOURCES)
+        if(source MATCHES "/(arm|arm64)/.*\\.asm$")
+            set_property(SOURCE "${source}" PROPERTY HEADER_FILE_ONLY TRUE)
+        endif()
+    endforeach()
 endif()
 
 add_library(${CMAKE_PROJECT_NAME} SHARED main.cpp companion.cpp config.cpp property_hook.cpp private_properties.cpp java_injection.cpp observation.cpp duck_hook.cpp ${PIF_VENDOR_DIR}/local_cxa_atexit_finalize_impl/atexit.cpp ${ENGINE_HOOK_SRC} ${XDL_SRC})
