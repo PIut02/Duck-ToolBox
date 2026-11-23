@@ -21,7 +21,7 @@ class InstallGuards(unittest.TestCase):
             (root / "module.prop").write_text(f"id={edition}\n")
             if backend:
                 (root / "bin").mkdir()
-                (root / "bin/duckd-x86_64").write_text("x86_64-backend\n")
+                (root / "bin/duckd-x86-64").write_text("x86_64-backend\n")
             (root / "util_functions.sh").write_text('''
 . "$MODPATH/identity.sh"
 MODULE_ID=$(duck_module_id "$MODPATH")

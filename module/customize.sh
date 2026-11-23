@@ -26,13 +26,13 @@ case "$ARCH" in
   arm64) ui_print "- Device platform: $ARCH" ;;
   x64|x86_64)
     ui_print "- Device platform: $ARCH (x86_64)"
-    [ -f "$MODPATH/bin/duckd-x86_64" ] ||
+    [ -f "$MODPATH/bin/duckd-x86-64" ] ||
       abort "! Unsupported platform: $ARCH (x86_64 backend missing from this package)."
-    cp "$MODPATH/bin/duckd-x86_64" "$MODPATH/bin/duckd" ||
+    cp "$MODPATH/bin/duckd-x86-64" "$MODPATH/bin/duckd" ||
       abort "! Could not install the x86_64 backend."
     chmod 0755 "$MODPATH/bin/duckd" ||
       abort "! Could not mark the x86_64 backend executable."
-    rm -f "$MODPATH/bin/duckd-x86_64"
+    rm -f "$MODPATH/bin/duckd-x86-64"
     # These helpers contain ARM64-only code and would only produce exec errors on x86_64.
     rm -f "$MODPATH/bin/tini-arm64" \
       "$MODPATH/play-integrity/pif-engine" \
