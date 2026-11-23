@@ -33,8 +33,13 @@ preset as a template against the real configuration parser without publication.
 Reference baseline: AOSP Android 16 release, bionic commit
 [`09a271af557444c9a6b3f3146d6d474156fd6cdb`](https://android.googlesource.com/platform/bionic/+/09a271af557444c9a6b3f3146d6d474156fd6cdb/libc/system_properties/system_properties.cpp).
 Bionic retains pointers into property areas; cloned areas therefore remain mapped
-for process lifetime. The scanner checks readable code, complete writable context
-arrays, bounded SELinux names and readable, complete property mapping starts.
+for process lifetime. The context array is located through structural anchors, not
+machine-code decoding: bionic names the array VMA `System property context nodes`
+via `PR_SET_VMA_ANON_NAME`, so `/proc/self/maps` provides its base directly. When the
+kernel omits that name, the scanner falls back to writable slots pointing at real
+`/dev/__properties__` mappings. Both paths share the same validation of complete
+writable context arrays, bounded SELinux names and readable, complete property
+mapping starts. This keeps arm64 and x86_64 on one architecture-neutral path.
 Unreadable, reversed, oversized and nonzero-offset mappings are rejected before copying. Unknown layouts
 skip property-memory mutation. A maps snapshot cannot protect against unrelated
 concurrent unmapping; runtime discovery is still vendor/version sensitive.

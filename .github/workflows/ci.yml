@@ -84,7 +84,9 @@ jobs:
           packages: 'build-tools;37.0.0 ndk;30.0.16248370 cmake;4.1.2'
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          targets: aarch64-linux-android
+          targets: |
+            aarch64-linux-android
+            x86_64-linux-android
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
@@ -131,7 +133,9 @@ jobs:
           packages: 'ndk;30.0.16248370'
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          targets: aarch64-linux-android
+          targets: |
+            aarch64-linux-android
+            x86_64-linux-android
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
@@ -144,12 +148,19 @@ jobs:
           python3 scripts/test-device-faker.py
       - name: Build ARM64 native engine and manager
         run: python3 scripts/build-device-faker.py --lint-native
+      - name: Build x86_64 native engine and manager
+        run: python3 scripts/build-device-faker.py --android-abi x86_64
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: device-faker
           path: |
             module/device-faker
             module/licenses/device-faker
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: device-faker-x86-64
+          path: target/device-faker-x86_64/
+          if-no-files-found: error
 
   android-backend:
     name: Android backend build
@@ -383,6 +394,11 @@ jobs:
         with:
           name: device-faker
           path: module
+      - name: Download x86_64 Device Faker engine
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: device-faker-x86-64
+          path: artifact/x86_64/device-faker
       - name: Assemble module
         id: assemble
         run: |
@@ -396,7 +412,12 @@ jobs:
             version="${version} (${code}-canary)"
           fi
           # Keep the release ZIPs and their inventory records isolated by edition.
-          full="$(python3 scripts/package-module.py --binary artifact/bin/full/duckd --binary-x86-64 artifact/bin/x86_64/full/duckd --channel "${RELEASE_CHANNEL}" --output-dir dist/full)"
+          full="$(python3 scripts/package-module.py \
+            --binary artifact/bin/full/duckd \
+            --binary-x86-64 artifact/bin/x86_64/full/duckd \
+            --pif-engine-x86-64 module/play-integrity/pif-engine-x86-64 \
+            --device-faker-engine-x86-64 artifact/x86_64/device-faker/device-faker-engine \
+            --channel "${RELEASE_CHANNEL}" --output-dir dist/full)"
           lite="$(python3 scripts/package-module.py --variant lite --binary artifact/bin/lite/duckd --webroot artifact/webroot-lite --channel "${RELEASE_CHANNEL}" --output-dir dist/lite)"
           name="${full##*/}"
           name="${name%.zip}"

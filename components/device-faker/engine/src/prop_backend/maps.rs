@@ -71,6 +71,32 @@ impl Maps {
             .find(|r| addr >= r.start && addr < r.end)
     }
 
+    /// bionic 给 `ContextNode` 数组设置的匿名 VMA 名（见 contexts_serialized.cpp）。
+    /// 内核启用 CONFIG_ANON_VMA_NAME 时它出现在 /proc/self/maps 里。
+    pub(super) fn named_context_arrays(&self) -> Vec<(usize, usize)> {
+        self.regions
+            .iter()
+            .filter(|r| r.path == "[anon:System property context nodes]")
+            .map(|r| (r.start, r.end))
+            .collect()
+    }
+
+    /// 所有可读可写映射的 `[start, end)`，供退化锚定使用。
+    pub(super) fn writable_regions(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.regions
+            .iter()
+            .filter(|r| r.readable && r.writable)
+            .map(|r| (r.start, r.end))
+    }
+
+    /// 包含 `addr` 的映射末端，供按 stride 推数组元素上限。
+    pub(super) fn region_end_from(&self, addr: usize) -> Option<usize> {
+        self.regions
+            .iter()
+            .find(|r| addr >= r.start && addr < r.end)
+            .map(|r| r.end)
+    }
+
     /// 本进程所有 `/dev/__properties__/*` 映射的起始地址。
     /// bionic 的 `ContextNode::prop_area_` 就等于映射起始地址（file offset 0）。
     pub(super) fn prop_area_starts(&self) -> HashSet<usize> {
@@ -104,11 +130,6 @@ impl Region {
             path: path.to_string(),
         })
     }
-
-    /// 与另一个映射是否来自同一个文件（同一 `dev:inode`）。
-    pub(super) fn same_file(&self, other: &Self) -> bool {
-        self.inode != 0 && self.dev == other.dev && self.inode == other.inode
-    }
 }
 #[cfg(test)]
 mod tests {
@@ -130,6 +151,18 @@ mod tests {
         assert!(!maps.readable(usize::MAX - 1, 8));
         assert!(!maps.readable(0, 8));
     }
+    #[test]
+    fn named_context_arrays_match_only_the_bionic_vma_name() {
+        let mut target = Region::parse("1000-2000 rw-p 00000000 00:00 0").unwrap();
+        target.path = "[anon:System property context nodes]".to_string();
+        let mut other = Region::parse("3000-4000 rw-p 00000000 00:00 0").unwrap();
+        other.path = "[anon:System property context nodes:stale]".to_string();
+        let maps = Maps {
+            regions: vec![target, other],
+        };
+        assert_eq!(maps.named_context_arrays(), vec![(0x1000, 0x2000)]);
+    }
+
     #[test]
     fn bounded_context_names_require_a_terminator_and_selinux_shape() {
         let bytes = b"u:object_r:default_prop:s0\0";

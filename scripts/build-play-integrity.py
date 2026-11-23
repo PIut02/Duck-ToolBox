@@ -21,6 +21,8 @@ DEPENDENCIES = {
         "5ec1cff/local_cxa_atexit_finalize_impl", "b269136606d6f230089fbf47a0b219f7f2ccef3c"
     ),
     "shadowhook": ("bytedance/android-inline-hook", "854c775c2c3676e57a0f383597ebf420b5204161"),
+    # x86_64 has no ShadowHook backend; Dobby supplies the inline hook there.
+    "Dobby": ("jmpews/Dobby", "5dfc8546954ce3b3198132ab13fddb89ee92cdd7"),
     "hiddenapibypass": ("LSPosed/AndroidHiddenApiBypass", "4efc64fcada7df15e7b5ba068e774343b760270d"),
     "lsplant": ("LSPosed/LSPlant", "6ac2280d8d88e14f0864c26ac97c1dc96713bde1"),
     "dex_builder": ("LSPosed/DexBuilder", "ac7fb2230954ee311808bad469b0db501f31bfb8"),
@@ -112,9 +114,22 @@ def main():
     })
     run("cargo", "build", "--locked", "--release", "--manifest-path", ENGINE / "Cargo.toml", "--target-dir", ROOT / "target/pif-engine", "--target", target, env=env)
     run(sys.executable, ROOT / "scripts/build-device-faker.py", "--sdk", args.sdk)
+
+    # x86_64/WSA: build the same components for the second ABI into separate dirs.
+    x86_target = "x86_64-linux-android"
+    x86_linker = toolchain / (f"{x86_target}26-clang.cmd" if os.name == "nt" else f"{x86_target}26-clang")
+    env.update({
+        "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER": str(x86_linker),
+        "CC_x86_64_linux_android": str(x86_linker),
+        "AR_x86_64_linux_android": str(toolchain / ("llvm-ar.exe" if os.name == "nt" else "llvm-ar")),
+    })
+    run("cargo", "build", "--locked", "--release", "--manifest-path", ENGINE / "Cargo.toml", "--target-dir", ROOT / "target/pif-engine-x86_64", "--target", x86_target, env=env)
+    run(sys.executable, ROOT / "scripts/build-device-faker.py", "--sdk", args.sdk, "--android-abi", "x86_64")
+
     env.update({"DUCK_RUNTIME_DIR": str(ROOT / "components/zygisk-runtime"),
                 "DUCK_LANGUAGE_DIR": str(ROOT / "components/language-spoof"),
                 "DUCK_FAKER_LIBRARY": str(ROOT / "target/device-faker/libdevicefaker.a"),
+                "DUCK_FAKER_LIBRARY_X86_64": str(ROOT / "target/device-faker/libdevicefaker-x86_64.a"),
                 "DUCK_FAKER_JAVA": str(ROOT / "components/device-faker/java")})
     wrapper = ENGINE / "android/gradlew"
     gradle_command = [wrapper.with_suffix(".bat")] if os.name == "nt" else ["sh", wrapper]
@@ -125,6 +140,7 @@ def main():
     payload.mkdir(parents=True, exist_ok=True)
     shutil.copytree(ENGINE / "scripts", payload / "scripts", dirs_exist_ok=True)
     shutil.copy2(ROOT / f"target/pif-engine/{target}/release/pif-engine", payload / "pif-engine")
+    shutil.copy2(ROOT / f"target/pif-engine-x86_64/{x86_target}/release/pif-engine", payload / "pif-engine-x86-64")
     dex = ENGINE / "android/app/build/intermediates/dex/release/minifyReleaseWithR8/classes.dex"
     shutil.copy2(dex, payload / "classes.dex")
     (payload / "language-spoof.version").write_text("1\n")
@@ -133,7 +149,7 @@ def main():
     if zygisk.exists():
         shutil.rmtree(zygisk)
     zygisk.mkdir(exist_ok=True)
-    for abi in ["arm64-v8a", "armeabi-v7a"]:
+    for abi in ["arm64-v8a", "armeabi-v7a", "x86_64"]:
         shutil.copy2(libraries / abi / "libplayintegrityfix.so", zygisk / f"{abi}.so")
     notices = ROOT / "module/licenses/play-integrity"
     if notices.exists():

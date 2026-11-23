@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-#include "shadowhook.h"
+#include "duck_hook.h"
 #include <sys/system_properties.h>
 #include <android/log.h>
 #include <atomic>
@@ -73,7 +73,7 @@ public:
         installed.store(this, std::memory_order_release);
         auto attach = [](const char *name, void *replacement, void **original) {
             void *symbol = dlsym(RTLD_DEFAULT, name);
-            if (!symbol || !shadowhook_hook_sym_addr(symbol, replacement, original))
+            if (!symbol || !duck_hook_sym_addr(symbol, replacement, original))
                 __android_log_print(ANDROID_LOG_WARN, "DuckLanguage", "Native language hook unavailable: %s", name);
         };
         attach("__system_property_get", reinterpret_cast<void *>(get), reinterpret_cast<void **>(&original_get));

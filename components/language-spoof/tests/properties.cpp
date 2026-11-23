@@ -27,7 +27,7 @@ extern "C" void *duck_test_dlsym(void *, const char *name) {
     if (!std::strcmp(name, "__system_property_read_callback")) return reinterpret_cast<void *>(original_callback);
     return nullptr;
 }
-extern "C" void *shadowhook_hook_sym_addr(void *target, void *replacement, void **original) {
+extern "C" void *duck_hook_sym_addr(void *target, void *replacement, void **original) {
     __atomic_store_n(original, target, __ATOMIC_RELEASE);
     if (target == reinterpret_cast<void *>(original_get)) get = reinterpret_cast<Get>(replacement);
     if (target == reinterpret_cast<void *>(original_read)) read = reinterpret_cast<Read>(replacement);

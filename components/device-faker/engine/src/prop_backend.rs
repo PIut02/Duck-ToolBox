@@ -4,14 +4,13 @@
 
 use std::collections::HashSet;
 
-use anyhow::{Context, bail};
-use log::{info, warn};
+use anyhow::bail;
+use log::info;
 
 /// 属性区映射路径前缀。
 const PROP_PREFIX: &str = "/dev/__properties__/";
 
-/// 在 `ContextsSerialized` 对象里搜索 context 数组字段的窗口大小。
-/// 只用于限定扫描范围，具体字段偏移仍由扫描 + 校验得出。
+/// 退化锚点无法定位所属映射时的默认搜索窗口。
 const SCAN_WINDOW: usize = 0x400;
 
 /// `ContextNode` 元素大小的候选值（随 libc 版本变，逐个验证）。
@@ -34,18 +33,7 @@ use maps::Maps;
 
 /// # Safety
 /// `addr` 必须落在可读映射内且长度足够（调用方用 `Maps::readable` 校验）。
-unsafe fn read_u8(addr: usize) -> u8 {
-    unsafe { (addr as *const u8).read() }
-}
-
-/// # Safety
-/// 同 [`read_u8`]，另需 4 字节对齐或使用非对齐读。
-unsafe fn read_u32(addr: usize) -> u32 {
-    unsafe { (addr as *const u32).read_unaligned() }
-}
-
-/// # Safety
-/// 同 [`read_u8`]，另需 8 字节对齐或使用非对齐读。
+/// 使用非对齐读，不要求 8 字节对齐。
 unsafe fn read_u64(addr: usize) -> u64 {
     unsafe { (addr as *const u64).read_unaligned() }
 }
@@ -54,44 +42,6 @@ unsafe fn read_u64(addr: usize) -> u64 {
 /// `addr` 必须落在**可写**映射内。
 unsafe fn write_u64(addr: usize, value: u64) {
     unsafe { (addr as *mut u64).write_unaligned(value) }
-}
-
-// ── AArch64 指令解码（只覆盖本方案需要的 4 种）──────────────────────────────
-
-/// `ADR Xd, label`：`0b0xx10000 immlo(2) immhi(19) Rd(5)`，
-/// 目标 = PC + 符号扩展的 21 位立即数。
-fn decode_adr(insn: u32, pc: usize) -> Option<usize> {
-    if insn & 0x9f00_0000 != 0x1000_0000 {
-        return None;
-    }
-    let immlo = ((insn >> 29) & 0x3) as i64;
-    let immhi = ((insn >> 5) & 0x7_ffff) as i64;
-    let imm = (((immhi << 2) | immlo) << 43) >> 43;
-    Some(pc.wrapping_add(imm as usize))
-}
-
-/// `B label`：`0b000101 imm26`，目标 = PC + 符号扩展的 imm26 × 4。
-fn decode_b(insn: u32, pc: usize) -> Option<usize> {
-    if insn & 0xfc00_0000 != 0x1400_0000 {
-        return None;
-    }
-    let imm = (((insn & 0x03ff_ffff) as i32) << 6) >> 6;
-    Some(pc.wrapping_add((imm as i64 * 4) as usize))
-}
-
-/// LDR/STR（unsigned offset 寻址）：返回 `(size, opc, imm12, rn, rt)`。
-/// `size=0/opc=1` = LDRB，`size=3/opc=1` = LDR(64)。
-fn decode_ldst_imm(insn: u32) -> Option<(u32, u32, u32, u32, u32)> {
-    if insn & 0x3f00_0000 != 0x3900_0000 {
-        return None;
-    }
-    Some((
-        insn >> 30,
-        (insn >> 22) & 0x3,
-        (insn >> 10) & 0xfff,
-        (insn >> 5) & 0x1f,
-        insn & 0x1f,
-    ))
 }
 
 // ── 结构定位 ─────────────────────────────────────────────────────────────────
@@ -111,7 +61,7 @@ pub struct PropBackend {
 /// 进程内缓存：属性后端结构解析一次即可。
 ///
 /// 必须在第一次 COW 克隆**之前**解析——克隆会把 context 节点的 `prop_area_`
-/// 改成匿名副本，之后 `find_context_array` 的「非零节点必须落在真实
+/// 改成匿名副本，之后 `validate_context_array` 的「非零节点必须落在真实
 /// `/dev/__properties__` 映射里」校验就会失败（真机实测报
 /// `no self-consistent context array in backend`）。
 static BACKEND: std::sync::OnceLock<PropBackend> = std::sync::OnceLock::new();
@@ -139,10 +89,6 @@ impl PropBackend {
             bail!("dlsym(__system_property_find) failed");
         }
 
-        let singleton = find_singleton(wrapper, &maps)?;
-        let (backend, backend_src) = find_backend(wrapper, singleton, &maps);
-        info!("prop backend: singleton={singleton:#x} backend={backend:#x} ({backend_src})");
-
         let area_starts = maps.prop_area_starts();
         if area_starts.len() < 8 {
             bail!(
@@ -157,7 +103,7 @@ impl PropBackend {
             probe
         );
 
-        let array = find_context_array(backend, &maps, &area_starts, probe)?;
+        let array = locate_context_array(&maps, &area_starts, probe)?;
         info!(
             "prop backend: contexts={:#x} count={} stride={:#x} pa_off={:#x}",
             array.base, array.count, array.stride, array.pa_off
@@ -255,127 +201,95 @@ impl PropBackend {
     }
 }
 
-/// 从 `__system_property_find` 的 `adr` 指令解码静态单例地址。
+/// 定位 `ContextNode` 数组。两条结构化锚点，均不依赖指令编码或调试符号：
 ///
-/// 校验两条（缺一不可，避免解码到无关地址）：
-/// 1. 目标落在**可写**段 —— 单例是可变静态对象，必然在 `.bss`/`.data`
-///    （字符串字面量在 `.rodata`，只读，可直接排除）；
-/// 2. 目标首 8 字节（vptr）指向**与包装同一个 so**的数据段（虚表在 `.data.rel.ro`）。
+/// 1. bionic 在 contexts_serialized.cpp 里用 prctl(PR_SET_VMA_ANON_NAME) 给数组
+///    命名为 "System property context nodes"，内核会在 /proc/self/maps 里显示。
+/// 2. 若内核未启用 CONFIG_ANON_VMA_NAME，退化为「prop_area 指针锚定」：只在
+///    可写映射里找值恰好等于某个真实 /dev/__properties__ 映射起点的槽位。
 ///
-/// ⚠️ 注意不能拿 `maps` 里的**路径**做比较：单例所在的 `.bss` 在运行时是
-/// 独立的匿名映射（`[anon:.bss]`），路径与 libc 的 `.text` 不同，
-/// 但 vptr 所在的 `.data.rel.ro` 与 `.text` 同属 libc.so 文件 —— 故用 `dev:inode` 比对。
-fn find_singleton(wrapper: usize, maps: &Maps) -> anyhow::Result<usize> {
-    let code = maps
-        .region_of(wrapper)
-        .ok_or_else(|| anyhow::anyhow!("__system_property_find not in any mapping"))?;
-
-    for i in 0..32 {
-        let pc = wrapper + i * 4;
-        if !maps.readable(pc, 4) {
-            break;
+/// 两者都复用 validate_context_array 做完整结构校验。
+fn locate_context_array(
+    maps: &Maps,
+    area_starts: &HashSet<usize>,
+    probe: Option<usize>,
+) -> anyhow::Result<ContextArray> {
+    // 主路径：内核 VMA 名锚点。数组基址直接给出，只需推 stride / pa_off。
+    for (base, end) in maps.named_context_arrays() {
+        if let Some(array) = resolve_array_at_base(base, end - base, maps, area_starts, probe) {
+            info!("prop backend: context array anchored by anon VMA name at {base:#x}");
+            return Ok(array);
         }
-        let insn = unsafe { read_u32(pc) };
-        let Some(target) = decode_adr(insn, pc) else {
-            continue;
-        };
-        let Some(region) = maps.region_of(target) else {
-            continue;
-        };
-        if !region.writable || !maps.readable(target, 16) {
-            continue;
-        }
-        let vptr = unsafe { read_u64(target) } as usize;
-        let Some(vptr_region) = maps.region_of(vptr) else {
-            continue;
-        };
-        if !maps.readable(vptr, 8) || !vptr_region.same_file(code) {
-            continue;
-        }
-        return Ok(target);
     }
-    bail!("no usable ADR target in __system_property_find")
-}
 
-/// 定位 `ContextsSerialized` 对象（`SystemProperties::Find` 里 `+backend_off` 处）。
-///
-/// 返回 `(对象地址, 来源说明)`。优先按指令解码；解码失败时退回「单例本体」
-/// ——`SystemProperties::AreaInit` 会把该字段写成 `this`，所以正常进程里两者相同。
-fn find_backend(wrapper: usize, singleton: usize, maps: &Maps) -> (usize, &'static str) {
-    if let Some(find_fn) = find_tail_call(wrapper, maps)
-        && let Some((inited_off, backend_off)) = decode_find_layout(find_fn, maps)
-    {
-        let inited = maps.readable(singleton + inited_off, 1)
-            && unsafe { read_u8(singleton + inited_off) } == 1;
-        if inited && maps.readable(singleton + backend_off, 8) {
-            let backend = unsafe { read_u64(singleton + backend_off) } as usize;
-            if maps.readable(backend, 16) {
-                return (backend, "decoded from SystemProperties::Find");
+    // 退化路径：prop_area 指针锚定。全架构统一，不读任何机器码。
+    let mut bases = Vec::new();
+    for (start, end) in maps.writable_regions() {
+        let mut cursor = start;
+        while cursor + 8 <= end {
+            if maps.readable(cursor, 8) {
+                let value = unsafe { read_u64(cursor) } as usize;
+                if area_starts.contains(&value) {
+                    // 指针槽之前 8..=64 字节处可能是数组元素的 pa_off；把候选
+                    // 基址集合作给 resolve，由结构校验裁定。
+                    for back in (8..=64).step_by(8) {
+                        if cursor >= back {
+                            bases.push(cursor - back);
+                        }
+                    }
+                }
             }
-        } else {
-            warn!("prop backend: inited byte at +{inited_off:#x} is not 1, ignoring decode");
+            cursor += 8;
         }
     }
-    (singleton, "fallback: backend == singleton")
+    bases.sort_unstable();
+    bases.dedup();
+    for base in bases {
+        if let Some(array) = resolve_array_at_base(base, 0, maps, area_starts, probe) {
+            info!("prop backend: context array anchored by prop_area pointer at {base:#x}");
+            return Ok(array);
+        }
+    }
+    bail!("no self-consistent context array in named or prop_area-anchored mappings")
 }
 
-/// 在导出包装里找尾部无条件跳转（`b SystemProperties::Find`）。
-fn find_tail_call(wrapper: usize, maps: &Maps) -> Option<usize> {
-    let code = maps.region_of(wrapper)?;
-    for i in 0..8 {
-        let pc = wrapper + i * 4;
-        if !maps.readable(pc, 4) {
-            break;
+/// 已知数组基址，枚举 stride / pa_off 并做完整校验。
+///
+/// `span` 是 VMA 名锚点给出的精确字节数；退化锚点没有可靠 span，传 0 表示
+/// 只按 stride 上限探测 count。
+fn resolve_array_at_base(
+    base: usize,
+    span: usize,
+    maps: &Maps,
+    area_starts: &HashSet<usize>,
+    probe: Option<usize>,
+) -> Option<ContextArray> {
+    if !maps.writable(base, 8) {
+        return None;
+    }
+    for &stride in STRIDE_CANDIDATES {
+        let count = if span > 0 {
+            span / stride
+        } else {
+            // 退化路径：从映射剩余空间按 stride 推上限，交给 validate 收敛。
+            let region_end = maps.region_end_from(base).unwrap_or(base + SCAN_WINDOW);
+            (region_end - base) / stride
+        };
+        if !(8..=4096).contains(&count) || !maps.writable(base, count * stride) {
+            continue;
         }
-        let insn = unsafe { read_u32(pc) };
-        let Some(target) = decode_b(insn, pc) else {
-            continue;
-        };
-        let Some(region) = maps.region_of(target) else {
-            continue;
-        };
-        if region.exec && region.same_file(code) {
-            return Some(target);
+        for pa_off in (16..stride).step_by(8) {
+            if validate_context_array(base, count, stride, pa_off, area_starts, probe, maps) {
+                return Some(ContextArray {
+                    base,
+                    count,
+                    stride,
+                    pa_off,
+                });
+            }
         }
     }
     None
-}
-
-/// 解码 `SystemProperties::Find` 序言，取 `(inited_off, backend_off)`。
-///
-/// 两者都是「以 `this`（入口参数 x0）为基址的 load」，且 `inited_` 是
-/// 紧随其后的那个字节字段（`backend_off < inited_off`）。
-fn decode_find_layout(find_fn: usize, maps: &Maps) -> Option<(usize, usize)> {
-    let mut inited_off = None;
-    let mut backend_off = None;
-    for i in 0..16 {
-        let pc = find_fn + i * 4;
-        if !maps.readable(pc, 4) {
-            break;
-        }
-        let insn = unsafe { read_u32(pc) };
-        let Some((size, opc, imm12, rn, _rt)) = decode_ldst_imm(insn) else {
-            continue;
-        };
-        // 只要 load（opc=1），且基址寄存器就是入口的 this（x0）。
-        if opc != 1 || rn != 0 {
-            continue;
-        }
-        match size {
-            0 => {
-                inited_off.get_or_insert(imm12 as usize);
-            }
-            3 => {
-                backend_off.get_or_insert(imm12 as usize * 8);
-            }
-            _ => {}
-        }
-    }
-    let (inited_off, backend_off) = (inited_off?, backend_off?);
-    if backend_off >= inited_off || inited_off == 0 {
-        return None;
-    }
-    Some((inited_off, backend_off))
 }
 
 /// 调用 `__system_property_find` 探测某个 key 实际路由到哪个区。
@@ -406,66 +320,6 @@ struct ContextArray {
     count: usize,
     stride: usize,
     pa_off: usize,
-}
-
-/// 在 `backend` 对象里扫描 context 数组。
-///
-/// 校验条件（缺一不可）：
-/// 1. `(base, count)` 相邻，`base` 可读，`count ∈ [8, 4096]`；
-/// 2. 整个数组可读；
-/// 3. 每个元素的 `prop_area_` 要么为 0（尚未惰性打开），要么**恰好**是本进程
-///    某个真实 `/dev/__properties__` 映射的起点；
-/// 4. 非零元素 ≥ 3 且至少分布在 2 个不同区；
-/// 5. 若探针拿到了路由结果，数组里必须包含该区（行为锚点）。
-fn find_context_array(
-    backend: usize,
-    maps: &Maps,
-    area_starts: &HashSet<usize>,
-    probe: Option<usize>,
-) -> anyhow::Result<ContextArray> {
-    let mut found: Option<ContextArray> = None;
-    let mut tried = 0usize;
-
-    for field_off in (0..SCAN_WINDOW).step_by(8) {
-        if !maps.readable(backend + field_off, 16) {
-            break;
-        }
-        let base = unsafe { read_u64(backend + field_off) } as usize;
-        let count = unsafe { read_u64(backend + field_off + 8) } as usize;
-        if !(8..=4096).contains(&count) || !maps.readable(base, 8) {
-            continue;
-        }
-        for &stride in STRIDE_CANDIDATES {
-            let Some(span) = count.checked_mul(stride) else {
-                continue;
-            };
-            if !maps.writable(base, span) {
-                continue;
-            }
-            for pa_off in (16..stride).step_by(8) {
-                tried += 1;
-                if validate_context_array(base, count, stride, pa_off, area_starts, probe, maps) {
-                    // 取字段偏移最小者：同一个对象里更靠前的就是活跃的那个
-                    // ContextsSerialized（zygote reload 用的第二个实例在后面）。
-                    found = Some(ContextArray {
-                        base,
-                        count,
-                        stride,
-                        pa_off,
-                    });
-                    break;
-                }
-            }
-            if found.is_some() {
-                break;
-            }
-        }
-        if found.is_some() {
-            break;
-        }
-    }
-
-    found.with_context(|| format!("no self-consistent context array in backend (tried {tried})"))
 }
 
 fn validate_context_array(

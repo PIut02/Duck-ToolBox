@@ -30,6 +30,7 @@ android {
         ndk {
             abiFilters += "armeabi-v7a"
             abiFilters += "arm64-v8a"
+            abiFilters += "x86_64"
         }
 
         externalNativeBuild {
@@ -40,6 +41,7 @@ android {
                 arguments += "-DDUCK_RUNTIME_DIR=${System.getenv("DUCK_RUNTIME_DIR") ?: ""}"
                 arguments += "-DDUCK_LANGUAGE_DIR=${System.getenv("DUCK_LANGUAGE_DIR") ?: ""}"
                 arguments += "-DDUCK_FAKER_LIBRARY=${System.getenv("DUCK_FAKER_LIBRARY") ?: ""}"
+                arguments += "-DDUCK_FAKER_LIBRARY_X86_64=${System.getenv("DUCK_FAKER_LIBRARY_X86_64") ?: ""}"
 
                 cppFlags += "-std=c++23"
                 cppFlags += "-fno-exceptions"

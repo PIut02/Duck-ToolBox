@@ -182,8 +182,17 @@ def validate():
         raise ValueError("Init helper hash differs from its pinned release")
     require(ROOT / init["notice"])
     elf(MODULE / "play-integrity/pif-engine", 2, 183)
+    x86_pif = MODULE / "play-integrity/pif-engine-x86-64"
+    if x86_pif.exists():
+        elf(x86_pif, 2, EM_X86_64)
+    x86_faker = MODULE / "device-faker/device-faker-engine-x86-64"
+    if x86_faker.exists():
+        elf(x86_faker, 2, EM_X86_64)
     elf(MODULE / "zygisk/arm64-v8a.so", 2, 183)
     elf(MODULE / "zygisk/armeabi-v7a.so", 1, 40)
+    x86_zygisk = MODULE / "zygisk/x86_64.so"
+    if x86_zygisk.exists():
+        elf(x86_zygisk, 2, EM_X86_64)
     dex = MODULE / "play-integrity/classes.dex"
     if not dex.read_bytes().startswith(b"dex\n"):
         raise ValueError("Invalid DEX payload")
@@ -267,6 +276,14 @@ def main():
         "--binary-x86-64",
         help="Optional x86_64 Android backend bundled in the Full ZIP for WSA",
     )
+    parser.add_argument(
+        "--pif-engine-x86-64",
+        help="Optional x86_64 Play Integrity engine bundled in the Full ZIP",
+    )
+    parser.add_argument(
+        "--device-faker-engine-x86-64",
+        help="Optional x86_64 Device Faker engine bundled in the Full ZIP",
+    )
     parser.add_argument("--webroot", help="Lite WebUI build directory")
     outputs = parser.add_mutually_exclusive_group()
     outputs.add_argument("--output")
@@ -279,8 +296,8 @@ def main():
     if archive.resolve().is_relative_to(MODULE.resolve()):
         parser.error("Archive output must be outside the module source directory")
     if args.variant == "lite":
-        if args.binary_x86_64:
-            parser.error("--binary-x86-64 is only supported for the Full package")
+        if args.binary_x86_64 or args.pif_engine_x86_64 or args.device_faker_engine_x86_64:
+            parser.error("x86_64 binaries are only supported for the Full package")
         package_lite(
             ROOT / (args.binary or "target/lite/duckd"),
             ROOT / (args.webroot or "target/lite/webroot"),
@@ -307,6 +324,20 @@ def main():
         x86_destination.chmod(0o755)
     else:
         x86_destination.unlink(missing_ok=True)
+    for argument, relative in [
+        ("pif_engine_x86_64", "play-integrity/pif-engine-x86-64"),
+        ("device_faker_engine_x86_64", "device-faker/device-faker-engine-x86-64"),
+    ]:
+        destination = MODULE / relative
+        source = getattr(args, argument)
+        if source:
+            source_path = ROOT / source
+            require(source_path)
+            if source_path.resolve() != destination.resolve():
+                shutil.copy2(source_path, destination)
+            destination.chmod(0o755)
+        else:
+            destination.unlink(missing_ok=True)
     for name in ["README.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md"]:
         shutil.copy2(ROOT / name, MODULE / name)
     for binary_path in [MODULE / "bin/duckd", MODULE / "play-integrity/pif-engine", MODULE / "device-faker/device-faker-engine"]:

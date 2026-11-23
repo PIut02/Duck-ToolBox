@@ -15,8 +15,11 @@ include_directories(${PIF_VENDOR_DIR})
 file(GLOB SHADOWHOOK_SRC
     ${shadowhook_SOURCE_DIR}/shadowhook/src/main/cpp/*.c
     ${shadowhook_SOURCE_DIR}/shadowhook/src/main/cpp/common/*.c
-    ${shadowhook_SOURCE_DIR}/shadowhook/src/main/cpp/third_party/xdl/*.c
 )
+
+# xDL is architecture-neutral and used directly by language spoofing, independent
+# of ShadowHook's inline-hook backend.
+file(GLOB XDL_SRC ${shadowhook_SOURCE_DIR}/shadowhook/src/main/cpp/third_party/xdl/*.c)
 
 if(CMAKE_ANDROID_ARCH_ABI STREQUAL "armeabi-v7a")
     file(GLOB SHADOWHOOK_ARCH_SRC ${shadowhook_SOURCE_DIR}/shadowhook/src/main/cpp/arch/arm/*.c ${shadowhook_SOURCE_DIR}/shadowhook/src/main/cpp/arch/arm/*.S)
@@ -35,7 +38,21 @@ include_directories(
     ${shadowhook_SOURCE_DIR}/shadowhook/src/main/cpp/third_party/xdl
 )
 
-add_library(${CMAKE_PROJECT_NAME} SHARED main.cpp companion.cpp config.cpp property_hook.cpp private_properties.cpp java_injection.cpp observation.cpp ${PIF_VENDOR_DIR}/local_cxa_atexit_finalize_impl/atexit.cpp ${SHADOWHOOK_SRC} ${SHADOWHOOK_ARCH_SRC})
+# ShadowHook has no x86_64 backend; keep only its architecture-neutral xDL there
+# (language spoofing uses it directly) and let Dobby provide the inline hook.
+set(ENGINE_HOOK_SRC ${SHADOWHOOK_SRC} ${SHADOWHOOK_ARCH_SRC})
+if(CMAKE_ANDROID_ARCH_ABI STREQUAL "x86_64")
+    set(ENGINE_HOOK_SRC "")
+    set(DOBBY_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+    set(DOBBY_BUILD_TEST OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${PIF_VENDOR_DIR}/Dobby ${CMAKE_CURRENT_BINARY_DIR}/dobby)
+endif()
+
+add_library(${CMAKE_PROJECT_NAME} SHARED main.cpp companion.cpp config.cpp property_hook.cpp private_properties.cpp java_injection.cpp observation.cpp duck_hook.cpp ${PIF_VENDOR_DIR}/local_cxa_atexit_finalize_impl/atexit.cpp ${ENGINE_HOOK_SRC} ${XDL_SRC})
+if(CMAKE_ANDROID_ARCH_ABI STREQUAL "x86_64")
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE dobby_static)
+    target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${PIF_VENDOR_DIR}/Dobby/include)
+endif()
 
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE log)
 
@@ -48,6 +65,7 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
 
 set(DUCK_RUNTIME_DIR "" CACHE PATH "Embedded Zygisk composition source")
 set(DUCK_FAKER_LIBRARY "" CACHE FILEPATH "ARM64 Device Faker static library")
+set(DUCK_FAKER_LIBRARY_X86_64 "" CACHE FILEPATH "x86_64 Device Faker static library")
 if(NOT EXISTS "${DUCK_RUNTIME_DIR}/entry.cpp")
     message(FATAL_ERROR "Build through scripts/build-play-integrity.py with the composite runtime")
 endif()
@@ -77,6 +95,14 @@ if(CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
     if(NOT EXISTS "${DUCK_FAKER_LIBRARY}")
         message(FATAL_ERROR "Build the embedded Device Faker static library first")
     endif()
+    set(DUCK_FAKER_LINK "${DUCK_FAKER_LIBRARY}")
+elseif(CMAKE_ANDROID_ARCH_ABI STREQUAL "x86_64")
+    if(NOT EXISTS "${DUCK_FAKER_LIBRARY_X86_64}")
+        message(FATAL_ERROR "Build the x86_64 embedded Device Faker static library first")
+    endif()
+    set(DUCK_FAKER_LINK "${DUCK_FAKER_LIBRARY_X86_64}")
+endif()
+if(DUCK_FAKER_LINK)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE DUCK_HAS_DEVICE_FAKER=1)
-    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE "${DUCK_FAKER_LIBRARY}" dl m)
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE "${DUCK_FAKER_LINK}" dl m)
 endif()

@@ -33,10 +33,23 @@ case "$ARCH" in
     chmod 0755 "$MODPATH/bin/duckd" ||
       abort "! Could not mark the x86_64 backend executable."
     rm -f "$MODPATH/bin/duckd-x86-64"
-    # These helpers contain ARM64-only code and would only produce exec errors on x86_64.
-    rm -f "$MODPATH/bin/tini-arm64" \
-      "$MODPATH/play-integrity/pif-engine" \
-      "$MODPATH/device-faker/device-faker-engine"
+    # Install the x86_64 engines under the names every lifecycle script expects.
+    for pair in \
+      "play-integrity/pif-engine-x86-64:play-integrity/pif-engine" \
+      "device-faker/device-faker-engine-x86-64:device-faker/device-faker-engine"
+    do
+      source="${pair%%:*}"
+      destination="${pair#*:}"
+      [ -f "$MODPATH/$source" ] ||
+        abort "! Unsupported platform: $ARCH ($source missing from this package)."
+      cp "$MODPATH/$source" "$MODPATH/$destination" ||
+        abort "! Could not install the x86_64 engine: $source."
+      chmod 0755 "$MODPATH/$destination" ||
+        abort "! Could not mark the x86_64 engine executable: $destination."
+      rm -f "$MODPATH/$source"
+    done
+    # Tini is a standalone ARM64 rootfs helper with no x86_64 payload.
+    rm -f "$MODPATH/bin/tini-arm64"
     ;;
   *) abort "! Unsupported platform: $ARCH (this package requires arm64 or x86_64)" ;;
 esac

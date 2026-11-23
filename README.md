@@ -299,9 +299,11 @@ update `update.json` to match the version and `duck-toolbox-<version>.zip` asset
 metadata and selects `duck-toolbox-*.zip` release assets. Published ZIPs contain
 `module.prop` at their root and support Android API 26+ on `arm64-v8a` and `x86_64`
 (including WSA). A single ZIP carries both backends; the installer selects the
-x86_64 one when the root manager reports `x64` or `x86_64`. On x86_64 the ARM64-only
-native helpers are removed during installation, so Zygisk injection, Tini/chroot,
-kernel-module mutation, ZRAM mutation and device RKP stay unavailable.
+x86_64 one when the root manager reports `x64` or `x86_64`, along with x86_64
+Play Integrity and Device Faker engines and their x86_64 Zygisk payload. Those
+features require a Zygisk loader with x86_64 support (for example ZygiskNext or
+ReZygisk); KernelSU itself does not ship one. The standalone ARM64 Tini rootfs
+helper has no x86_64 counterpart and is removed on x86_64.
 Other architectures are still rejected before runtime data is prepared.
 The repository must enable release immutability and be registered through the
 [KernelSU Modules developer portal](https://developers.kernelsu.org/).
@@ -397,10 +399,12 @@ python3 scripts/test_rkp_v1_bridge.py  # AIDL fixture, framing and error propaga
 cargo build --release --package duckd --target aarch64-linux-android
 cargo build --release --package duckd --target x86_64-linux-android
 
-# One ZIP for both architectures (x86_64 backend is optional for arm64-only builds)
+# One ZIP for both architectures (x86_64 payloads are optional for arm64-only builds)
 python3 scripts/package-module.py \
   --binary target/aarch64-linux-android/release/duckd \
-  --binary-x86-64 target/x86_64-linux-android/release/duckd
+  --binary-x86-64 target/x86_64-linux-android/release/duckd \
+  --pif-engine-x86-64 module/play-integrity/pif-engine-x86-64 \
+  --device-faker-engine-x86-64 target/device-faker-x86_64/device-faker-engine
 
 cd ui
 pnpm install --frozen-lockfile

@@ -2,7 +2,7 @@
 #include "language.hpp"
 #include "lsplant.hpp"
 #include "pthread_keys.hpp"
-#include "shadowhook.h"
+#include "duck_hook.h"
 #include "xdl.h"
 #include <android/log.h>
 #include <map>
@@ -51,14 +51,14 @@ bool install(JNIEnv *env, const std::string &locale, std::vector<char> &dex) {
         void *art = xdl_open("libart.so", XDL_DEFAULT);
         if (!art) return;
         struct Symbols { void *handle; ~Symbols() { xdl_close(handle); } } symbols{art};
-        // ShadowHook can install process-wide signal handlers even if initialization fails.
+        // The hook engine can install process-wide signal handlers even if init fails.
         resident = true;
         duck::keep_pthread_keys();
-        if (shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false) != 0) return;
+        if (duck_hook_init(DUCK_HOOK_MODE_UNIQUE, false) != 0) return;
         lsplant::InitInfo info{
             .inline_hooker = [](void *target, void *replacement) -> void * {
                 void *original = nullptr;
-                void *stub = shadowhook_hook_sym_addr(target, replacement, &original);
+                void *stub = duck_hook_sym_addr(target, replacement, &original);
                 if (!stub) return nullptr;
                 std::lock_guard lock(trampoline_lock);
                 trampolines[target] = stub;
@@ -68,7 +68,7 @@ bool install(JNIEnv *env, const std::string &locale, std::vector<char> &dex) {
                 std::lock_guard lock(trampoline_lock);
                 auto found = trampolines.find(target);
                 if (found == trampolines.end()) return false;
-                bool result = shadowhook_unhook(found->second) == 0;
+                bool result = duck_unhook(found->second) == 0;
                 if (result) trampolines.erase(found);
                 return result;
             },
