@@ -106,11 +106,12 @@ def main():
     suffix = ".cmd" if os.name == "nt" else ""
     target_triple = "aarch64-linux-android" if args.android_abi == "arm64-v8a" else "x86_64-linux-android"
     linker = toolchain / f"{target_triple}26-clang{suffix}"
-    env_key = target_triple.upper().replace("-", "_")
+    cargo_key = target_triple.upper().replace("-", "_")
+    cc_key = target_triple.replace("-", "_")
     env = {**base_env,
-           f"CARGO_TARGET_{env_key}_LINKER": str(linker),
-           f"CC_{env_key}": str(linker),
-           f"AR_{env_key}": str(toolchain / ("llvm-ar.exe" if os.name == "nt" else "llvm-ar"))}
+           f"CARGO_TARGET_{cargo_key}_LINKER": str(linker),
+           f"CC_{cc_key}": str(linker),
+           f"AR_{cc_key}": str(toolchain / ("llvm-ar.exe" if os.name == "nt" else "llvm-ar"))}
     abi_suffix = "" if args.android_abi == "arm64-v8a" else f"-{args.android_abi}"
     native_dir = TARGET / f"native{abi_suffix}"
     manager_dir = ROOT / f"target/device-faker-manager{abi_suffix}"

@@ -1,7 +1,9 @@
 param(
   [string]$BinaryPath = "target/aarch64-linux-android/release/duckd",
   [string]$DistDir = "dist",
-  [string]$X86BinaryPath = ""
+  [string]$X86BinaryPath = "",
+  [string]$X86PifEngine = "",
+  [string]$X86FakerEngine = ""
 )
 $ErrorActionPreference = "Stop"
 $packager = Join-Path $PSScriptRoot "package-module.py"
@@ -10,5 +12,7 @@ $versionLine = Get-Content (Join-Path $repoRoot "module/module.prop") | Where-Ob
 $version = $versionLine.Split('=', 2)[1].Trim()
 $pythonArgs = @($packager, "--binary", $BinaryPath, "--output", "$DistDir/duck-toolbox-$version.zip")
 if ($X86BinaryPath) { $pythonArgs += @("--binary-x86-64", $X86BinaryPath) }
+if ($X86PifEngine) { $pythonArgs += @("--pif-engine-x86-64", $X86PifEngine) }
+if ($X86FakerEngine) { $pythonArgs += @("--device-faker-engine-x86-64", $X86FakerEngine) }
 python @pythonArgs
 if ($LASTEXITCODE -ne 0) { throw "Module validation or packaging failed." }

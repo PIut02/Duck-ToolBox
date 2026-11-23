@@ -34,38 +34,6 @@ def run(*args, **kwargs):
     subprocess.run([str(arg) for arg in args], check=True, **kwargs)
 
 
-def build_dobby_x86(ndk):
-    """Build Dobby's x86_64 static library the way its own CI does.
-
-    Embedding Dobby through Gradle's add_subdirectory makes its ARM assembly and
-    Linux platform sources compile under the wrong toolchain. Building it as a
-    standalone CMake project with the Android toolchain avoids both problems.
-    """
-    dobby = VENDOR / "Dobby"
-    build_dir = ROOT / "target/dobby-x86_64"
-    toolchain_file = ndk / "build/cmake/android.toolchain.cmake"
-    if not toolchain_file.is_file():
-        raise SystemExit(f"Android CMake toolchain missing: {toolchain_file}")
-    sdk_cmake = sorted((Path(ndk.parent.parent) / "cmake").glob("*/bin/cmake"))
-    cmake = str(sdk_cmake[-1]) if sdk_cmake else shutil.which("cmake")
-    if not cmake:
-        raise SystemExit("cmake is required to build the x86_64 inline hook")
-    build_dir.mkdir(parents=True, exist_ok=True)
-    run(cmake, "-S", dobby, "-B", build_dir,
-        f"-DCMAKE_TOOLCHAIN_FILE={toolchain_file}",
-        "-DCMAKE_BUILD_TYPE=Release",
-        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
-        "-DANDROID_ABI=x86_64",
-        "-DANDROID_PLATFORM=android-26",
-        "-DDOBBY_BUILD_EXAMPLE=OFF",
-        "-DDOBBY_BUILD_TEST=OFF")
-    run(cmake, "--build", build_dir, "--target", "dobby_static", "--config", "Release")
-    library = build_dir / "libdobby.a"
-    if not library.is_file():
-        raise SystemExit(f"Dobby x86_64 static library missing: {library}")
-    return library
-
-
 def dependencies():
     VENDOR.mkdir(parents=True, exist_ok=True)
     for name, (repo, commit) in DEPENDENCIES.items():
@@ -107,6 +75,49 @@ def dependencies():
     value = symbols.read_text()
     if '#include "xdl-prefix.inc"' not in value:
         symbols.write_text(value + '\n// Modified 2026-10-31: expose ART prefix lookup.\n#include "xdl-prefix.inc"\n')
+    patch_dobby()
+
+
+def patch_dobby():
+    """Make the pinned Dobby buildable for Android x86_64.
+
+    Upstream lists every architecture's .asm unconditionally, so the arm64
+    trampolines are fed to the x86_64 assembler and fail. Two more upstream
+    inconsistencies only surface on x86_64: an include cycle that hides OSMemory,
+    and RuntimeModule.load_address (the struct field is named base).
+    """
+    root = VENDOR / "Dobby"
+    cmake = root / "CMakeLists.txt"
+    value = cmake.read_text()
+    if "# Duck: ARM assembly excluded on x86_64" not in value:
+        value = value.replace(
+            "  source/TrampolineBridge/ClosureTrampolineBridge/arm64/closure_bridge_arm64.asm\n"
+            "  source/TrampolineBridge/ClosureTrampolineBridge/arm64/closure_trampoline_arm64.asm\n",
+            "  # Duck: ARM assembly excluded on x86_64\n")
+        cmake.write_text(value)
+    runtime = root / "source/Backend/UserMode/PlatformUtil/Linux/ProcessRuntime.cc"
+    value = runtime.read_text()
+    if "DUCK_RUNTIME_MODULE_BASE" not in value:
+        value = value.replace("RuntimeModule module = {0};",
+                              "RuntimeModule module = {0};  // DUCK_RUNTIME_MODULE_BASE")
+        value = value.replace("module.load_address", "module.base")
+        runtime.write_text(value)
+    features = root / "common/os_arch_features.h"
+    value = features.read_text()
+    if "DUCK_NO_ARCH_MEMORY" not in value:
+        value = value.replace("#if defined(ANDROID)\n  auto page",
+                              "#if 0  // DUCK_NO_ARCH_MEMORY: include cycle hides OSMemory; unused on x86_64\n  auto page")
+        features.write_text(value)
+    # x64 trampolines use #if/#define, so their .asm needs the C preprocessor.
+    # Upstream only sets this for ARM/AARCH64.
+    compiler = root / "cmake/compiler_and_linker.cmake"
+    value = compiler.read_text()
+    if "DUCK_ASM_CPP" not in value:
+        value = value.replace(
+            "elseif (PROCESSOR.AARCH64)\n  set(CMAKE_ASM_FLAGS \"${CMAKE_ASM_FLAGS} -x assembler-with-cpp\")\nendif ()",
+            "elseif (PROCESSOR.AARCH64)\n  set(CMAKE_ASM_FLAGS \"${CMAKE_ASM_FLAGS} -x assembler-with-cpp\")\n"
+            "elseif (PROCESSOR.X86_64)\n  set(CMAKE_ASM_FLAGS \"${CMAKE_ASM_FLAGS} -x assembler-with-cpp\")  # DUCK_ASM_CPP\nendif ()")
+        compiler.write_text(value)
 
 
 def source_revision():
@@ -157,13 +168,11 @@ def main():
     })
     run("cargo", "build", "--locked", "--release", "--manifest-path", ENGINE / "Cargo.toml", "--target-dir", ROOT / "target/pif-engine-x86_64", "--target", x86_target, env=env)
     run(sys.executable, ROOT / "scripts/build-device-faker.py", "--sdk", args.sdk, "--android-abi", "x86_64")
-    dobby_x86 = build_dobby_x86(ndk)
 
     env.update({"DUCK_RUNTIME_DIR": str(ROOT / "components/zygisk-runtime"),
                 "DUCK_LANGUAGE_DIR": str(ROOT / "components/language-spoof"),
                 "DUCK_FAKER_LIBRARY": str(ROOT / "target/device-faker/libdevicefaker.a"),
                 "DUCK_FAKER_LIBRARY_X86_64": str(ROOT / "target/device-faker/libdevicefaker-x86_64.a"),
-                "DOBBY_LIBRARY_X86_64": str(dobby_x86),
                 "DUCK_FAKER_JAVA": str(ROOT / "components/device-faker/java")})
     wrapper = ENGINE / "android/gradlew"
     gradle_command = [wrapper.with_suffix(".bat")] if os.name == "nt" else ["sh", wrapper]
@@ -213,7 +222,7 @@ def main():
             f"{source_url}\n"
             "Build and dependency retrieval script:\n"
             f"https://github.com/eltavine/Duck-ToolBox/blob/{commit}/scripts/build-play-integrity.py\n"
-            "This script retrieves pinned dependency sources and applies the recorded ShadowHook change.\n"
+            "This script retrieves pinned dependency sources and applies the recorded vendor changes.\n"
         )
     (notices.parent / "play-integrity-source.tar.gz").unlink(missing_ok=True)
     (ROOT / "module/webroot/licenses/play-integrity-source.tar.gz").unlink(missing_ok=True)

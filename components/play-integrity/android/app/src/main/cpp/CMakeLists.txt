@@ -41,17 +41,16 @@ include_directories(
 # ShadowHook has no x86_64 backend; keep only its architecture-neutral xDL there
 # (language spoofing uses it directly) and let Dobby provide the inline hook.
 set(ENGINE_HOOK_SRC ${SHADOWHOOK_SRC} ${SHADOWHOOK_ARCH_SRC})
-set(DOBBY_LIBRARY_X86_64 "" CACHE FILEPATH "Prebuilt x86_64 Dobby static library")
 if(CMAKE_ANDROID_ARCH_ABI STREQUAL "x86_64")
     set(ENGINE_HOOK_SRC "")
-    if(NOT EXISTS "${DOBBY_LIBRARY_X86_64}")
-        message(FATAL_ERROR "Build the x86_64 Dobby static library first")
-    endif()
+    set(DOBBY_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+    set(DOBBY_BUILD_TEST OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${PIF_VENDOR_DIR}/Dobby ${CMAKE_CURRENT_BINARY_DIR}/dobby)
 endif()
 
 add_library(${CMAKE_PROJECT_NAME} SHARED main.cpp companion.cpp config.cpp property_hook.cpp private_properties.cpp java_injection.cpp observation.cpp duck_hook.cpp ${PIF_VENDOR_DIR}/local_cxa_atexit_finalize_impl/atexit.cpp ${ENGINE_HOOK_SRC} ${XDL_SRC})
 if(CMAKE_ANDROID_ARCH_ABI STREQUAL "x86_64")
-    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE "${DOBBY_LIBRARY_X86_64}")
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE dobby_static)
     target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${PIF_VENDOR_DIR}/Dobby/include)
 endif()
 

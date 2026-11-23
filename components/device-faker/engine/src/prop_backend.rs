@@ -335,7 +335,7 @@ fn validate_context_array(
     let mut distinct = HashSet::new();
     let mut has_probe = probe.is_none();
     for i in 0..count {
-        let name = unsafe { read_u64(base + i * stride + pa_off - 8) } as usize;
+        let name = unsafe { read_u64(base + i * stride + pa_off.saturating_sub(8)) } as usize;
         if !maps.context_name(name) {
             return false;
         }
