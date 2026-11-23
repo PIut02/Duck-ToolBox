@@ -41,26 +41,17 @@ include_directories(
 # ShadowHook has no x86_64 backend; keep only its architecture-neutral xDL there
 # (language spoofing uses it directly) and let Dobby provide the inline hook.
 set(ENGINE_HOOK_SRC ${SHADOWHOOK_SRC} ${SHADOWHOOK_ARCH_SRC})
+set(DOBBY_LIBRARY_X86_64 "" CACHE FILEPATH "Prebuilt x86_64 Dobby static library")
 if(CMAKE_ANDROID_ARCH_ABI STREQUAL "x86_64")
     set(ENGINE_HOOK_SRC "")
-    set(DOBBY_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
-    set(DOBBY_BUILD_TEST OFF CACHE BOOL "" FORCE)
-    # Dobby's CMake omits -x assembler-with-cpp for x86_64, but its x64 trampoline
-    # uses cdecl()/#define macros, so the NDK assembler needs preprocessing.
-    set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -x assembler-with-cpp")
-    # Dobby lists every architecture's .asm unconditionally; its ARM assembly is
-    # not valid x86_64 input. Mark those sources before add_subdirectory so both
-    # dobby and dobby_static skip them.
-    file(GLOB DOBBY_ARM_ASM
-        ${PIF_VENDOR_DIR}/Dobby/source/TrampolineBridge/ClosureTrampolineBridge/arm/*.asm
-        ${PIF_VENDOR_DIR}/Dobby/source/TrampolineBridge/ClosureTrampolineBridge/arm64/*.asm)
-    set_source_files_properties(${DOBBY_ARM_ASM} PROPERTIES HEADER_FILE_ONLY TRUE)
-    add_subdirectory(${PIF_VENDOR_DIR}/Dobby ${CMAKE_CURRENT_BINARY_DIR}/dobby)
+    if(NOT EXISTS "${DOBBY_LIBRARY_X86_64}")
+        message(FATAL_ERROR "Build the x86_64 Dobby static library first")
+    endif()
 endif()
 
 add_library(${CMAKE_PROJECT_NAME} SHARED main.cpp companion.cpp config.cpp property_hook.cpp private_properties.cpp java_injection.cpp observation.cpp duck_hook.cpp ${PIF_VENDOR_DIR}/local_cxa_atexit_finalize_impl/atexit.cpp ${ENGINE_HOOK_SRC} ${XDL_SRC})
 if(CMAKE_ANDROID_ARCH_ABI STREQUAL "x86_64")
-    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE dobby_static)
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE "${DOBBY_LIBRARY_X86_64}")
     target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${PIF_VENDOR_DIR}/Dobby/include)
 endif()
 

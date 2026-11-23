@@ -42,6 +42,7 @@ android {
                 arguments += "-DDUCK_LANGUAGE_DIR=${System.getenv("DUCK_LANGUAGE_DIR") ?: ""}"
                 arguments += "-DDUCK_FAKER_LIBRARY=${System.getenv("DUCK_FAKER_LIBRARY") ?: ""}"
                 arguments += "-DDUCK_FAKER_LIBRARY_X86_64=${System.getenv("DUCK_FAKER_LIBRARY_X86_64") ?: ""}"
+                arguments += "-DDOBBY_LIBRARY_X86_64=${System.getenv("DOBBY_LIBRARY_X86_64") ?: ""}"
 
                 cppFlags += "-std=c++23"
                 cppFlags += "-fno-exceptions"

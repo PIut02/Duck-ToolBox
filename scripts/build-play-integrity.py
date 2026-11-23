@@ -34,6 +34,38 @@ def run(*args, **kwargs):
     subprocess.run([str(arg) for arg in args], check=True, **kwargs)
 
 
+def build_dobby_x86(ndk):
+    """Build Dobby's x86_64 static library the way its own CI does.
+
+    Embedding Dobby through Gradle's add_subdirectory makes its ARM assembly and
+    Linux platform sources compile under the wrong toolchain. Building it as a
+    standalone CMake project with the Android toolchain avoids both problems.
+    """
+    dobby = VENDOR / "Dobby"
+    build_dir = ROOT / "target/dobby-x86_64"
+    toolchain_file = ndk / "build/cmake/android.toolchain.cmake"
+    if not toolchain_file.is_file():
+        raise SystemExit(f"Android CMake toolchain missing: {toolchain_file}")
+    sdk_cmake = sorted((Path(ndk.parent.parent) / "cmake").glob("*/bin/cmake"))
+    cmake = str(sdk_cmake[-1]) if sdk_cmake else shutil.which("cmake")
+    if not cmake:
+        raise SystemExit("cmake is required to build the x86_64 inline hook")
+    build_dir.mkdir(parents=True, exist_ok=True)
+    run(cmake, "-S", dobby, "-B", build_dir,
+        f"-DCMAKE_TOOLCHAIN_FILE={toolchain_file}",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+        "-DANDROID_ABI=x86_64",
+        "-DANDROID_PLATFORM=android-26",
+        "-DDOBBY_BUILD_EXAMPLE=OFF",
+        "-DDOBBY_BUILD_TEST=OFF")
+    run(cmake, "--build", build_dir, "--target", "dobby_static", "--config", "Release")
+    library = build_dir / "libdobby.a"
+    if not library.is_file():
+        raise SystemExit(f"Dobby x86_64 static library missing: {library}")
+    return library
+
+
 def dependencies():
     VENDOR.mkdir(parents=True, exist_ok=True)
     for name, (repo, commit) in DEPENDENCIES.items():
@@ -125,11 +157,13 @@ def main():
     })
     run("cargo", "build", "--locked", "--release", "--manifest-path", ENGINE / "Cargo.toml", "--target-dir", ROOT / "target/pif-engine-x86_64", "--target", x86_target, env=env)
     run(sys.executable, ROOT / "scripts/build-device-faker.py", "--sdk", args.sdk, "--android-abi", "x86_64")
+    dobby_x86 = build_dobby_x86(ndk)
 
     env.update({"DUCK_RUNTIME_DIR": str(ROOT / "components/zygisk-runtime"),
                 "DUCK_LANGUAGE_DIR": str(ROOT / "components/language-spoof"),
                 "DUCK_FAKER_LIBRARY": str(ROOT / "target/device-faker/libdevicefaker.a"),
                 "DUCK_FAKER_LIBRARY_X86_64": str(ROOT / "target/device-faker/libdevicefaker-x86_64.a"),
+                "DOBBY_LIBRARY_X86_64": str(dobby_x86),
                 "DUCK_FAKER_JAVA": str(ROOT / "components/device-faker/java")})
     wrapper = ENGINE / "android/gradlew"
     gradle_command = [wrapper.with_suffix(".bat")] if os.name == "nt" else ["sh", wrapper]
