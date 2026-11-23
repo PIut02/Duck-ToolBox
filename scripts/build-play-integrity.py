@@ -98,10 +98,25 @@ def patch_dobby():
     runtime = root / "source/Backend/UserMode/PlatformUtil/Linux/ProcessRuntime.cc"
     value = runtime.read_text()
     if "DUCK_RUNTIME_MODULE_BASE" not in value:
+        value = value.replace("  return (a.start < b.start);",
+                              "  return (a.start() < b.start());  // DUCK_RUNTIME_MODULE_BASE")
         value = value.replace("RuntimeModule module = {0};",
                               "RuntimeModule module = {0};  // DUCK_RUNTIME_MODULE_BASE")
         value = value.replace("module.load_address", "module.base")
         runtime.write_text(value)
+    # The same stale field name also appears in the Android symbol resolver.
+    symres = root / "builtin-plugin/SymbolResolver/elf/dobby_symbol_resolver.cc"
+    value = symres.read_text()
+    if "module.load_address" in value:
+        symres.write_text(value.replace("module.load_address", "module.base"))
+    code_patch = root / "source/Backend/UserMode/ExecMemory/code-patch-tool-posix.cc"
+    value = code_patch.read_text()
+    if "DUCK_DROP_CPU_INCLUDE" not in value:
+        # core/arch/Cpu.h does not exist in this revision; dobby_internal.h already
+        # provides ALIGN_FLOOR, addr_t and ClearCache.
+        value = value.replace('#include "core/arch/Cpu.h"',
+                              '// DUCK_DROP_CPU_INCLUDE: header absent; declarations come from dobby_internal.h')
+        code_patch.write_text(value)
     features = root / "common/os_arch_features.h"
     value = features.read_text()
     if "DUCK_NO_ARCH_MEMORY" not in value:
