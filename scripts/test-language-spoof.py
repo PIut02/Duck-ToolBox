@@ -38,8 +38,8 @@ struct prop_info { const char *name; const char *value; };
 #define ANDROID_LOG_WARN 5
 int __android_log_print(int, const char *, const char *, ...);
 ''')
-    (includes / "shadowhook.h").write_text('''#pragma once
-extern "C" void *shadowhook_hook_sym_addr(void *, void *, void **);
+    (includes / "duck_hook.h").write_text('''#pragma once
+extern "C" void *duck_hook_sym_addr(void *, void *, void **);
 ''')
     property_test = root / "properties"
     subprocess.run([

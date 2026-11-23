@@ -7,10 +7,6 @@ pub(super) struct Region {
     pub(super) offset: u64,
     pub(super) readable: bool,
     pub(super) writable: bool,
-    pub(super) exec: bool,
-    /// `major:minor`，与 `inode` 一起标识映射来源的文件
-    pub(super) dev: String,
-    pub(super) inode: u64,
     pub(super) path: String,
 }
 
@@ -114,8 +110,8 @@ impl Region {
         let range = ws.next()?;
         let perms = ws.next()?;
         let offset = ws.next()?;
-        let dev = ws.next()?;
-        let inode = ws.next()?;
+        let _dev = ws.next()?;
+        let _inode = ws.next()?;
         let path = ws.next().unwrap_or("");
         let (start_s, end_s) = range.split_once('-')?;
         Some(Self {
@@ -124,9 +120,6 @@ impl Region {
             offset: u64::from_str_radix(offset, 16).ok()?,
             readable: perms.as_bytes().first() == Some(&b'r'),
             writable: perms.as_bytes().get(1) == Some(&b'w'),
-            exec: perms.as_bytes().get(2) == Some(&b'x'),
-            dev: dev.to_string(),
-            inode: inode.parse::<u64>().ok()?,
             path: path.to_string(),
         })
     }
