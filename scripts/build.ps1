@@ -4,6 +4,7 @@ param(
   [string]$SdkRoot = $(if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { $env:ANDROID_SDK_ROOT }),
   [ValidateSet("debug", "release")]
   [string]$Profile = "release",
+  [ValidateSet("arm64-v8a", "x86_64")]
   [string]$AndroidAbi = "arm64-v8a",
   [switch]$SkipRust,
   [switch]$SkipWeb,
@@ -17,7 +18,9 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $uiDir = Join-Path $repoRoot "ui"
 $packageScript = Join-Path $PSScriptRoot "package-module.ps1"
 $toolchainBin = Join-Path $NdkRoot "toolchains\llvm\prebuilt\windows-x86_64\bin"
-$binaryRelativePath = "target\aarch64-linux-android\$Profile\duckd"
+$abiTargets = @{ "arm64-v8a" = "aarch64-linux-android"; "x86_64" = "x86_64-linux-android" }
+$rustTarget = $abiTargets[$AndroidAbi]
+$binaryRelativePath = "target\$rustTarget\$Profile\duckd"
 $binaryPath = Join-Path $repoRoot $binaryRelativePath
 
 function Write-Step([string]$Message) {
@@ -75,10 +78,10 @@ if (-not $SkipRust) {
     }
   }
 
-  Invoke-Step "Ensuring Rust target aarch64-linux-android is installed" {
+  Invoke-Step "Ensuring Rust target $rustTarget is installed" {
     $installedTargets = rustup target list --installed
-    if ($installedTargets -notcontains "aarch64-linux-android") {
-      Invoke-Checked { rustup target add aarch64-linux-android } "Failed to add Rust target aarch64-linux-android."
+    if ($installedTargets -notcontains $rustTarget) {
+      Invoke-Checked { rustup target add $rustTarget } "Failed to add Rust target $rustTarget."
     }
   }
 
@@ -157,7 +160,15 @@ Invoke-Step "Building the independent Play Integrity engine" {
 
 if ($PackageModule) {
   Invoke-Step "Packaging KernelSU module zip" {
-    & $packageScript -BinaryPath $binaryRelativePath
+    if ($AndroidAbi -eq "x86_64") {
+      $armBinary = "target\aarch64-linux-android\$Profile\duckd"
+      if (-not (Test-Path (Join-Path $repoRoot $armBinary))) {
+        throw "A universal package needs the arm64 backend too; build it with -AndroidAbi arm64-v8a first."
+      }
+      & $packageScript -BinaryPath $armBinary -X86BinaryPath $binaryRelativePath
+    } else {
+      & $packageScript -BinaryPath $binaryRelativePath
+    }
     if ($LASTEXITCODE -ne 0) { throw "Module packaging failed." }
   }
 }

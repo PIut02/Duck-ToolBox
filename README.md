@@ -297,8 +297,12 @@ update `update.json` to match the version and `duck-toolbox-<version>.zip` asset
 
 **KernelSU Modules repository.** The root `module.yaml` supplies the module listing
 metadata and selects `duck-toolbox-*.zip` release assets. Published ZIPs contain
-`module.prop` at their root; the current builds target Android API 26+ on arm64-v8a.
-The installer rejects other architectures before preparing runtime data.
+`module.prop` at their root and support Android API 26+ on `arm64-v8a` and `x86_64`
+(including WSA). A single ZIP carries both backends; the installer selects the
+x86_64 one when the root manager reports `x64` or `x86_64`. On x86_64 the ARM64-only
+native helpers are removed during installation, so Zygisk injection, Tini/chroot,
+kernel-module mutation, ZRAM mutation and device RKP stay unavailable.
+Other architectures are still rejected before runtime data is prepared.
 The repository must enable release immutability and be registered through the
 [KernelSU Modules developer portal](https://developers.kernelsu.org/).
 Nightly prereleases are checked and recorded but are not displayed as stable versions.
@@ -367,7 +371,8 @@ and JSON requests are separate modes; put all operation options in the JSON requ
 ## Building and testing
 
 Requirements:
-- Rust stable with the `aarch64-linux-android` target (`rust-toolchain.toml` installs it).
+- Rust stable with the `aarch64-linux-android` and `x86_64-linux-android` targets
+  (`rust-toolchain.toml` installs both).
 - Android NDK r30.
 - JDK 17 or newer and Android SDK Build Tools 36.0.0 for the embedded V1 bridge.
   Set `ANDROID_HOME` or `ANDROID_SDK_ROOT`; `ANDROID_BUILD_TOOLS_VERSION` can select
@@ -388,8 +393,14 @@ cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 python3 scripts/test_rkp_v1_bridge.py  # AIDL fixture, framing and error propagation (JDK)
 
-# Device binary, e.g. with the NDK's clang as linker
+# Device binaries, e.g. with the NDK's clang as linker
 cargo build --release --package duckd --target aarch64-linux-android
+cargo build --release --package duckd --target x86_64-linux-android
+
+# One ZIP for both architectures (x86_64 backend is optional for arm64-only builds)
+python3 scripts/package-module.py \
+  --binary target/aarch64-linux-android/release/duckd \
+  --binary-x86-64 target/x86_64-linux-android/release/duckd
 
 cd ui
 pnpm install --frozen-lockfile

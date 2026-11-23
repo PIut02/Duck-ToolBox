@@ -19,6 +19,7 @@ permissions:
 env:
   ANDROID_API_LEVEL: 26
   TARGET: aarch64-linux-android
+  TARGET_X86_64: x86_64-linux-android
   NDK_VERSION: r30
   NODE_VERSION: 24
   CARGO_TERM_COLOR: always
@@ -175,6 +176,8 @@ jobs:
         with:
           targets: ${{ env.TARGET }}
           components: clippy
+      - name: Add x86_64 Android target
+        run: rustup target add "${TARGET_X86_64}"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Build backend binary
         env:
@@ -189,6 +192,12 @@ jobs:
           install -D -m 0755 "target/${TARGET}/release/duckd" artifact/full/duckd
           cargo build --locked --release --package duckd --target "${TARGET}" --no-default-features --features lite
           install -D -m 0755 "target/${TARGET}/release/duckd" artifact/lite/duckd
+          export CC_x86_64_linux_android="${TOOLCHAIN}/${TARGET_X86_64}${ANDROID_API_LEVEL}-clang"
+          export CXX_x86_64_linux_android="${TOOLCHAIN}/${TARGET_X86_64}${ANDROID_API_LEVEL}-clang++"
+          export AR_x86_64_linux_android="${TOOLCHAIN}/llvm-ar"
+          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="${CC_x86_64_linux_android}"
+          cargo build --locked --release --package duckd --target "${TARGET_X86_64}"
+          install -D -m 0755 "target/${TARGET_X86_64}/release/duckd" artifact/x86_64/full/duckd
       - name: Upload backend binary
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -387,7 +396,7 @@ jobs:
             version="${version} (${code}-canary)"
           fi
           # Keep the release ZIPs and their inventory records isolated by edition.
-          full="$(python3 scripts/package-module.py --binary artifact/bin/full/duckd --channel "${RELEASE_CHANNEL}" --output-dir dist/full)"
+          full="$(python3 scripts/package-module.py --binary artifact/bin/full/duckd --binary-x86-64 artifact/bin/x86_64/full/duckd --channel "${RELEASE_CHANNEL}" --output-dir dist/full)"
           lite="$(python3 scripts/package-module.py --variant lite --binary artifact/bin/lite/duckd --webroot artifact/webroot-lite --channel "${RELEASE_CHANNEL}" --output-dir dist/lite)"
           name="${full##*/}"
           name="${name%.zip}"

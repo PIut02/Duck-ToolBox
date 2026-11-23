@@ -24,6 +24,7 @@ from supply_chain.payload import (
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / "module"
+EM_X86_64 = 62
 
 
 def require(path):
@@ -172,6 +173,9 @@ def validate():
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             raise ValueError(f"Engine artifact hash mismatch: {name}")
     elf(MODULE / "bin/duckd", 2, 183)
+    x86_backend = MODULE / "bin/duckd-x86-64"
+    if x86_backend.exists():
+        elf(x86_backend, 2, EM_X86_64)
     elf(MODULE / "bin/tini-arm64", 2, 183)
     init = json.loads((ROOT / "components/linux-env/tini.json").read_text())
     if hashlib.sha256((MODULE / "bin/tini-arm64").read_bytes()).hexdigest() != init["sha256"]:
@@ -259,6 +263,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--variant", choices=["full", "lite"], default="full")
     parser.add_argument("--binary")
+    parser.add_argument(
+        "--binary-x86-64",
+        help="Optional x86_64 Android backend bundled in the Full ZIP for WSA",
+    )
     parser.add_argument("--webroot", help="Lite WebUI build directory")
     outputs = parser.add_mutually_exclusive_group()
     outputs.add_argument("--output")
@@ -271,6 +279,8 @@ def main():
     if archive.resolve().is_relative_to(MODULE.resolve()):
         parser.error("Archive output must be outside the module source directory")
     if args.variant == "lite":
+        if args.binary_x86_64:
+            parser.error("--binary-x86-64 is only supported for the Full package")
         package_lite(
             ROOT / (args.binary or "target/lite/duckd"),
             ROOT / (args.webroot or "target/lite/webroot"),
@@ -288,6 +298,15 @@ def main():
     destination = MODULE / "bin/duckd"
     if binary.resolve() != destination.resolve():
         shutil.copy2(binary, destination)
+    x86_destination = MODULE / "bin/duckd-x86-64"
+    if args.binary_x86_64:
+        x86_binary = ROOT / args.binary_x86_64
+        require(x86_binary)
+        if x86_binary.resolve() != x86_destination.resolve():
+            shutil.copy2(x86_binary, x86_destination)
+        x86_destination.chmod(0o755)
+    else:
+        x86_destination.unlink(missing_ok=True)
     for name in ["README.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md"]:
         shutil.copy2(ROOT / name, MODULE / name)
     for binary_path in [MODULE / "bin/duckd", MODULE / "play-integrity/pif-engine", MODULE / "device-faker/device-faker-engine"]:

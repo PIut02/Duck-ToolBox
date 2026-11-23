@@ -24,7 +24,21 @@ fi
 
 case "$ARCH" in
   arm64) ui_print "- Device platform: $ARCH" ;;
-  *) abort "! Unsupported platform: $ARCH (this package requires arm64)" ;;
+  x64|x86_64)
+    ui_print "- Device platform: $ARCH (x86_64)"
+    [ -f "$MODPATH/bin/duckd-x86_64" ] ||
+      abort "! Unsupported platform: $ARCH (x86_64 backend missing from this package)."
+    cp "$MODPATH/bin/duckd-x86_64" "$MODPATH/bin/duckd" ||
+      abort "! Could not install the x86_64 backend."
+    chmod 0755 "$MODPATH/bin/duckd" ||
+      abort "! Could not mark the x86_64 backend executable."
+    rm -f "$MODPATH/bin/duckd-x86_64"
+    # These helpers contain ARM64-only code and would only produce exec errors on x86_64.
+    rm -f "$MODPATH/bin/tini-arm64" \
+      "$MODPATH/play-integrity/pif-engine" \
+      "$MODPATH/device-faker/device-faker-engine"
+    ;;
+  *) abort "! Unsupported platform: $ARCH (this package requires arm64 or x86_64)" ;;
 esac
 
 if [ -z "$API" ] || [ "$API" -lt 26 ]; then
@@ -65,7 +79,7 @@ fi
 ui_print " "
 ui_print "! Duck ToolBox is not part of Tricky Store, TEESimulator or OhMyKeymint."
 ui_print "  Do not report its issues to those projects."
-if [ "$MODULE_ID" = "duck-toolbox" ]; then
+if [ "$MODULE_ID" = "duck-toolbox" ] && [ -f "$MODPATH/device-faker/device-faker-engine" ]; then
   # shellcheck source=device-faker.sh
   . "$MODPATH/device-faker.sh"
   setup_device_faker || abort "! Device Faker payload setup failed."

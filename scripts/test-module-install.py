@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class InstallGuards(unittest.TestCase):
-    def install(self, architecture, api, edition="duck-toolbox", conflict=False):
+    def install(self, architecture, api, edition="duck-toolbox", conflict=False, backend=True):
         with tempfile.TemporaryDirectory(prefix="duck-install-guard-") as directory:
             root = Path(directory)
             shutil.copy2(ROOT / "module/customize.sh", root / "customize.sh")
@@ -19,6 +19,9 @@ class InstallGuards(unittest.TestCase):
             if edition == "duck-toolbox":
                 shutil.copy2(ROOT / "module/device-faker.sh", root / "device-faker.sh")
             (root / "module.prop").write_text(f"id={edition}\n")
+            if backend:
+                (root / "bin").mkdir()
+                (root / "bin/duckd-x86_64").write_text("x86_64-backend\n")
             (root / "util_functions.sh").write_text('''
 . "$MODPATH/identity.sh"
 MODULE_ID=$(duck_module_id "$MODPATH")
@@ -37,40 +40,63 @@ abort() { printf '%s\\n' "$*"; exit 1; }
                 "APATCH": "false", "MODPATH": str(root), "TEST_RUNTIME": str(runtime),
                 "TEST_CONFLICT": str(int(conflict)),
             })
-            return result, (runtime / "prepared").exists()
+            selected = root / "bin/duckd"
+            return result, (runtime / "prepared").exists(), selected.read_text() if selected.is_file() else None
 
     def test_supported_arm64_prepares_runtime(self):
-        result, prepared = self.install("arm64", 26)
+        result, prepared, backend = self.install("arm64", 26)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(prepared)
+        self.assertIsNone(backend)
+
+    def test_supported_x86_64_prepares_runtime(self):
+        for architecture in ("x64", "x86_64"):
+            with self.subTest(architecture=architecture):
+                result, prepared, backend = self.install(architecture, 26)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(prepared)
+                self.assertEqual(backend, "x86_64-backend\n")
+                self.assertNotIn("Device Faker", result.stdout)
+
+    def test_x86_64_without_backend_fails_before_runtime_changes(self):
+        result, prepared, backend = self.install("x64", 26, backend=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("x86_64 backend missing", result.stdout)
+        self.assertFalse(prepared)
+        self.assertIsNone(backend)
 
     def test_incompatible_architectures_fail_before_runtime_changes(self):
-        for architecture in ["x64", "x86", "arm", "unknown"]:
+        for architecture in ["x86", "arm", "unknown"]:
             with self.subTest(architecture=architecture):
-                result, prepared = self.install(architecture, 26)
+                result, prepared, _ = self.install(architecture, 26)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("this package requires arm64", result.stdout)
+                self.assertIn("requires arm64 or x86_64", result.stdout)
                 self.assertFalse(prepared)
 
     def test_unsupported_android_fails_before_runtime_changes(self):
-        result, prepared = self.install("arm64", 25)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("API 26", result.stdout)
-        self.assertFalse(prepared)
+        for architecture in ("arm64", "x64"):
+            with self.subTest(architecture=architecture):
+                result, prepared, _ = self.install(architecture, 25)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("API 26", result.stdout)
+                self.assertFalse(prepared)
 
     def test_lite_installs_without_device_faker_setup(self):
-        result, prepared = self.install("arm64", 26, "duck-toolbox-lite")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue(prepared)
-        self.assertNotIn("Device Faker", result.stdout)
+        for architecture in ("arm64", "x64"):
+            with self.subTest(architecture=architecture):
+                result, prepared, _ = self.install(architecture, 26, "duck-toolbox-lite")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(prepared)
+                self.assertNotIn("Device Faker", result.stdout)
 
     def test_other_edition_blocks_install_before_runtime_changes(self):
-        for edition in ("duck-toolbox", "duck-toolbox-lite"):
-            with self.subTest(edition=edition):
-                result, prepared = self.install("arm64", 26, edition, conflict=True)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("cannot coexist", result.stdout)
-                self.assertFalse(prepared)
+        for architecture in ("arm64", "x64"):
+            for edition in ("duck-toolbox", "duck-toolbox-lite"):
+                with self.subTest(architecture=architecture, edition=edition):
+                    result, prepared, _ = self.install(architecture, 26, edition, conflict=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("cannot coexist", result.stdout)
+                    self.assertFalse(prepared)
 
     def test_active_and_pending_other_editions_conflict(self):
         with tempfile.TemporaryDirectory() as directory:
