@@ -41,7 +41,9 @@ public:
         settings=pif::settings(std::move(config),process=="com.android.vending");
         if (settings.injectDex() && dex.empty()) { LOGD("Configured DEX payload unavailable"); unload(); return; }
         if (!settings.injectDex()) std::vector<char>().swap(dex);
+#if defined(__aarch64__)
         if (settings.fullInjection && settings.spoofProps) privateProperties.prepare(settings);
+#endif
         ready=true;
     }
     void postAppSpecialize(const zygisk::AppSpecializeArgs *) override {
